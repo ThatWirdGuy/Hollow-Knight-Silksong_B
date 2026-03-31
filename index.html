@@ -3,30 +3,47 @@
   <head>
     <base href="https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@master/">
     <meta charset="utf-8">
-    <title>Silksong Lite Booter</title>
+    <title>Silksong Debug Booter</title>
     <style>
-      body { background: #000; margin: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; color: white; font-family: sans-serif; }
-      #unity-canvas { width: 100%; height: 100%; position: absolute; }
-      #loader { z-index: 10; text-align: center; }
-      .bar { width: 200px; height: 2px; background: #333; margin-top: 10px; }
-      #fill { width: 0%; height: 100%; background: #00ffcc; transition: width 0.2s; }
+      body { background: #000; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; color: #666; font-family: monospace; }
+      #unity-canvas { width: 100%; height: 100%; position: absolute; background: #000; }
+      #loading-box { z-index: 20; text-align: center; }
+      .bar { width: 200px; height: 2px; background: #222; margin: 10px auto; }
+      #fill { width: 0%; height: 100%; background: #fff; transition: width 0.2s; }
     </style>
   </head>
   <body>
     <canvas id="unity-canvas"></canvas>
     
-    <div id="loader">
-      <div id="status">CONNECTING...</div>
+    <div id="loading-box">
+      <div id="status">INITIALIZING...</div>
       <div class="bar"><div id="fill"></div></div>
-      <div style="font-size: 10px; color: #666; margin-top: 10px;">LOW RAM MODE ACTIVE</div>
     </div>
 
     <script>
-      const status = document.querySelector("#status");
+      const statusText = document.querySelector("#status");
       const fill = document.querySelector("#fill");
       const canvas = document.querySelector("#unity-canvas");
 
-      // AGGRESSIVE MEMORY CONFIG
+      // 1. Error Handling Function
+      function handleFatalError(err) {
+        const msg = err.message || err.toString();
+        console.error("Unity Error:", msg);
+        
+        // Detailed alerts for 4GB RAM troubleshooting
+        if (msg.includes("memory") || msg.includes("buffer")) {
+          alert("FATAL ERROR: Chromebook RAM is full (Stalled at 622MB).\n\nFIX: Close ALL other tabs and restart your Chromebook.");
+        } else if (msg.includes("WebGL") || msg.includes("context")) {
+          alert("GRAPHICS ERROR: Hardware acceleration is disabled or the GPU crashed.\n\nFIX: Enable 'Hardware Acceleration' in Chrome Settings.");
+        } else {
+          alert("CRASH REPORT:\n" + msg);
+        }
+        
+        statusText.textContent = "BOOT FAILED. SEE ALERT.";
+        statusText.style.color = "red";
+      }
+
+      // 2. Unity Configuration
       const config = {
         dataUrl: "Build/w-pt.data.unityweb",
         frameworkUrl: "Build/w-pt.framework.js.unityweb",
@@ -36,46 +53,50 @@
         productName: "Hollow Knight Silksong",
         productVersion: "1.0",
         devicePixelRatio: 1, 
+        matchWebGLToCanvasSize: true,
         webglContextAttributes: {
           preserveDrawingBuffer: false,
+          powerPreference: "high-performance",
           antialias: false,
-          alpha: false,
-          stencil: false
+          stencil: false,
+          alpha: false
         },
       };
 
+      // 3. Boot Logic
       const script = document.createElement("script");
-      // Use the 'latest' branch loader for better compatibility
       script.src = "https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@latest/Build/w-pt.loader.js";
 
       script.onload = () => {
-        status.textContent = "LOADING GAME ENGINE...";
+        statusText.textContent = "LOADING ENGINE...";
         
         createUnityInstance(canvas, config, (progress) => {
           fill.style.width = (progress * 100) + "%";
-          status.textContent = "LOADING: " + Math.round(progress * 100) + "%";
-          
-          // Force a memory clear at 90% (Common hang point)
-          if (progress > 0.9) {
-            status.textContent = "FINALIZING ASSETS...";
-          }
-        }).then((unityInstance) => {
-          document.querySelector("#loader").style.display = "none";
-        }).catch((err) => {
-          if (err.toString().includes("memory")) {
-            status.textContent = "RAM FULL - REFRESH TAB";
-          } else {
-            status.textContent = "ERROR: " + err.slice(0, 20);
-          }
+          statusText.textContent = "LOADING: " + Math.round(progress * 100) + "%";
+        })
+        .then((instance) => {
+          document.querySelector("#loading-box").style.display = "none";
+        })
+        .catch((err) => {
+          handleFatalError(err);
         });
+      };
+
+      // Catch global script errors (like if the loader fails to fetch)
+      window.onerror = function(message, source, lineno, colno, error) {
+        handleFatalError(message);
+        return true;
       };
 
       document.body.appendChild(script);
 
-      // CRITICAL: Prevent Chromebook from "Sleeping" during the 200MB+ download
-      if ('wakeLock' in navigator) {
-        navigator.wakeLock.request('screen').catch(()=>{});
-      }
+      // Listen for WebGL context loss specifically
+      canvas.addEventListener("webglcontextlost", function(event) {
+        event.preventDefault();
+        alert("CRITICAL: The Chromebook GPU stopped the game to save memory.");
+        location.reload();
+      }, false);
+
     </script>
   </body>
 </html>
