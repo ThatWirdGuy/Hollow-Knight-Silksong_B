@@ -3,100 +3,81 @@
   <head>
     <base href="https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@master/">
     <meta charset="utf-8">
-    <title>Silksong Debug Booter</title>
+    <title>Unity Web Player | Hollow Knight SilkSong</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
     <style>
-      body { background: #000; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; color: #666; font-family: monospace; }
-      #unity-canvas { width: 100%; height: 100%; position: absolute; background: #000; }
-      #loading-box { z-index: 20; text-align: center; }
-      .bar { width: 200px; height: 2px; background: #222; margin: 10px auto; }
-      #fill { width: 0%; height: 100%; background: #fff; transition: width 0.2s; }
+      body { background: #000; color: #fff; font-family: sans-serif; margin: 0; overflow: hidden; }
+      #unity-canvas { width: 100vw; height: 100vh; background: #000; }
+      #custom-loader { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+      .progress-bar { width: 200px; height: 4px; background: #333; margin-top: 10px; border-radius: 2px; }
+      #progress-fill { width: 0%; height: 100%; background: #fff; transition: width 0.2s; }
     </style>
   </head>
   <body>
-    <canvas id="unity-canvas"></canvas>
-    
-    <div id="loading-box">
-      <div id="status">INITIALIZING...</div>
-      <div class="bar"><div id="fill"></div></div>
+    <div id="unity-container">
+      <canvas id="unity-canvas" tabindex="-1"></canvas>
+    </div>
+
+    <div id="custom-loader">
+      <div id="status-text">INITIALIZING ENGINE...</div>
+      <div class="progress-bar"><div id="progress-fill"></div></div>
     </div>
 
     <script>
-      const statusText = document.querySelector("#status");
-      const fill = document.querySelector("#fill");
+      const statusText = document.querySelector("#status-text");
+      const progressFill = document.querySelector("#progress-fill");
       const canvas = document.querySelector("#unity-canvas");
 
-      // 1. Error Handling Function
-      function handleFatalError(err) {
-        const msg = err.message || err.toString();
-        console.error("Unity Error:", msg);
-        
-        // Detailed alerts for 4GB RAM troubleshooting
-        if (msg.includes("memory") || msg.includes("buffer")) {
-          alert("FATAL ERROR: Chromebook RAM is full (Stalled at 622MB).\n\nFIX: Close ALL other tabs and restart your Chromebook.");
-        } else if (msg.includes("WebGL") || msg.includes("context")) {
-          alert("GRAPHICS ERROR: Hardware acceleration is disabled or the GPU crashed.\n\nFIX: Enable 'Hardware Acceleration' in Chrome Settings.");
-        } else {
-          alert("CRASH REPORT:\n" + msg);
-        }
-        
-        statusText.textContent = "BOOT FAILED. SEE ALERT.";
-        statusText.style.color = "red";
-      }
-
-      // 2. Unity Configuration
+      const buildUrl = "Build";
       const config = {
-        dataUrl: "Build/w-pt.data.unityweb",
-        frameworkUrl: "Build/w-pt.framework.js.unityweb",
-        codeUrl: "Build/w-pt.wasm.unityweb",
+        dataUrl: buildUrl + "/w-pt.data.unityweb",
+        frameworkUrl: buildUrl + "/w-pt.framework.js.unityweb",
+        codeUrl: buildUrl + "/w-pt.wasm.unityweb",
         streamingAssetsUrl: "StreamingAssets",
-        companyName: "Team Cherry",
-        productName: "Hollow Knight Silksong",
+        companyName: "EDUrocks Group, Truffled, GN-Math",
+        productName: "Hollow Knight SilkSong",
         productVersion: "1.0",
-        devicePixelRatio: 1, 
+        
+        // --- CHROMEBOOK STABILITY SETTINGS ---
+        devicePixelRatio: 1, // Stops high-res crashes
         matchWebGLToCanvasSize: true,
         webglContextAttributes: {
           preserveDrawingBuffer: false,
           powerPreference: "high-performance",
-          antialias: false,
-          stencil: false,
+          antialias: false, // Saves significant RAM
+          stencil: false,   // Saves RAM
           alpha: false
         },
       };
 
-      // 3. Boot Logic
       const script = document.createElement("script");
       script.src = "https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@latest/Build/w-pt.loader.js";
 
       script.onload = () => {
-        statusText.textContent = "LOADING ENGINE...";
+        statusText.textContent = "DOWNLOADING ASSETS...";
         
         createUnityInstance(canvas, config, (progress) => {
-          fill.style.width = (progress * 100) + "%";
+          progressFill.style.width = (progress * 100) + "%";
           statusText.textContent = "LOADING: " + Math.round(progress * 100) + "%";
         })
-        .then((instance) => {
-          document.querySelector("#loading-box").style.display = "none";
+        .then((unityInstance) => {
+          document.querySelector("#custom-loader").style.display = "none";
         })
         .catch((err) => {
-          handleFatalError(err);
+          console.error(err);
+          alert("CRASH DETECTED:\n" + err + "\n\nTry closing all other tabs and Guest Mode.");
+          statusText.textContent = "FAILED TO LOAD";
         });
-      };
-
-      // Catch global script errors (like if the loader fails to fetch)
-      window.onerror = function(message, source, lineno, colno, error) {
-        handleFatalError(message);
-        return true;
       };
 
       document.body.appendChild(script);
 
-      // Listen for WebGL context loss specifically
-      canvas.addEventListener("webglcontextlost", function(event) {
-        event.preventDefault();
-        alert("CRITICAL: The Chromebook GPU stopped the game to save memory.");
-        location.reload();
+      // Listen for WebGL context loss (GPU crash)
+      canvas.addEventListener("webglcontextlost", function(e) {
+        e.preventDefault();
+        alert("The Chromebook GPU ran out of memory. Please restart your device.");
       }, false);
-
     </script>
   </body>
 </html>
