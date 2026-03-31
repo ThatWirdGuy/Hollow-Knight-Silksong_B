@@ -3,103 +3,79 @@
   <head>
     <base href="https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@master/">
     <meta charset="utf-8">
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Unity Web Player | Hollow Knight SilkSong</title>
-    <link rel="shortcut icon" href="TemplateData/favicon.ico">
-    <link rel="stylesheet" href="TemplateData/style.css">
+    <title>Silksong Lite Booter</title>
     <style>
-      body { background-color: #000; margin: 0; padding: 0; overflow: hidden; }
-      #unity-container { width: 100%; height: 100%; position: absolute; background: #000; }
-      #unity-canvas { width: 100vw; height: 100vh; display: block; }
-      #loading-overlay {
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        background: #000; display: flex; flex-direction: column;
-        justify-content: center; align-items: center; z-index: 10;
-      }
-      #status-text { color: #888; font-family: monospace; font-size: 14px; margin-top: 10px; }
+      body { background: #000; margin: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; color: white; font-family: sans-serif; }
+      #unity-canvas { width: 100%; height: 100%; position: absolute; }
+      #loader { z-index: 10; text-align: center; }
+      .bar { width: 200px; height: 2px; background: #333; margin-top: 10px; }
+      #fill { width: 0%; height: 100%; background: #00ffcc; transition: width 0.2s; }
     </style>
   </head>
   <body>
-    <div id="unity-container">
-      <canvas id="unity-canvas" tabindex="-1"></canvas>
-    </div>
-
-    <div id="loading-overlay">
-      <div id="loading-bar-container" style="width: 200px; height: 2px; background: #333;">
-        <div id="loading-bar-fill" style="width: 0%; height: 100%; background: #fff; transition: width 0.3s;"></div>
-      </div>
-      <div id="status-text">INITIALIZING ENGINE...</div>
+    <canvas id="unity-canvas"></canvas>
+    
+    <div id="loader">
+      <div id="status">CONNECTING...</div>
+      <div class="bar"><div id="fill"></div></div>
+      <div style="font-size: 10px; color: #666; margin-top: 10px;">LOW RAM MODE ACTIVE</div>
     </div>
 
     <script>
-      const statusText = document.querySelector("#status-text");
-      const barFill = document.querySelector("#loading-bar-fill");
+      const status = document.querySelector("#status");
+      const fill = document.querySelector("#fill");
       const canvas = document.querySelector("#unity-canvas");
 
-      const buildUrl = "Build";
+      // AGGRESSIVE MEMORY CONFIG
       const config = {
-        dataUrl: buildUrl + "/w-pt.data.unityweb",
-        frameworkUrl: buildUrl + "/w-pt.framework.js.unityweb",
-        codeUrl: buildUrl + "/w-pt.wasm.unityweb",
+        dataUrl: "Build/w-pt.data.unityweb",
+        frameworkUrl: "Build/w-pt.framework.js.unityweb",
+        codeUrl: "Build/w-pt.wasm.unityweb",
         streamingAssetsUrl: "StreamingAssets",
         companyName: "Team Cherry",
         productName: "Hollow Knight Silksong",
         productVersion: "1.0",
-        
-        // --- AGGRESSIVE RAM MANAGEMENT ---
-        devicePixelRatio: 1, // Force low-res buffer
-        matchWebGLToCanvasSize: true,
+        devicePixelRatio: 1, 
         webglContextAttributes: {
-          alpha: false,
-          antialias: false,
-          depth: true,
-          stencil: false, // Save extra bits of RAM
           preserveDrawingBuffer: false,
-          powerPreference: "high-performance",
+          antialias: false,
+          alpha: false,
+          stencil: false
         },
       };
 
-      // Force Chrome to drop previous memory usage
-      window.addEventListener('load', () => {
-        if (window.gc) window.gc(); 
-      });
-
       const script = document.createElement("script");
-      // Using the loader from the latest build branch
+      // Use the 'latest' branch loader for better compatibility
       script.src = "https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@latest/Build/w-pt.loader.js";
 
       script.onload = () => {
-        statusText.textContent = "ENGINE READY. FETCHING DATA...";
+        status.textContent = "LOADING GAME ENGINE...";
         
         createUnityInstance(canvas, config, (progress) => {
-          barFill.style.width = (progress * 100) + "%";
-          statusText.textContent = "LOADING: " + Math.round(progress * 100) + "%";
-        })
-        .then((instance) => {
-          document.querySelector("#loading-overlay").style.display = "none";
-          console.log("Game Started");
-        })
-        .catch((err) => {
-          console.error(err);
-          // Auto-reload attempt if it's a transient memory error
-          if (err.includes("context lost") || err.includes("memory")) {
-            statusText.textContent = "RAM OVERLOAD. RELOADING IN 3s...";
-            setTimeout(() => location.reload(), 3000);
+          fill.style.width = (progress * 100) + "%";
+          status.textContent = "LOADING: " + Math.round(progress * 100) + "%";
+          
+          // Force a memory clear at 90% (Common hang point)
+          if (progress > 0.9) {
+            status.textContent = "FINALIZING ASSETS...";
+          }
+        }).then((unityInstance) => {
+          document.querySelector("#loader").style.display = "none";
+        }).catch((err) => {
+          if (err.toString().includes("memory")) {
+            status.textContent = "RAM FULL - REFRESH TAB";
           } else {
-            statusText.textContent = "ERROR: " + err;
+            status.textContent = "ERROR: " + err.slice(0, 20);
           }
         });
       };
 
       document.body.appendChild(script);
 
-      // Kill the black screen hang: If nothing happens in 30 seconds, refresh
-      setTimeout(() => {
-        if (statusText.textContent === "INITIALIZING ENGINE...") {
-            statusText.textContent = "STUCK? CHECKING CONNECTION...";
-            location.reload();
-        }
-      }, 30000);
+      // CRITICAL: Prevent Chromebook from "Sleeping" during the 200MB+ download
+      if ('wakeLock' in navigator) {
+        navigator.wakeLock.request('screen').catch(()=>{});
+      }
     </script>
   </body>
 </html>
