@@ -7,12 +7,16 @@
     <title>Unity Web Player | Hollow Knight SilkSong</title>
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
+    <style>
+      /* Force a lower resolution for the canvas to save GPU RAM */
+      #unity-canvas { width: 100%; height: auto; max-width: 960px; background: #000; }
+    </style>
   </head>
   <body>
-    <div id="loading-text" style="color: white; font-size: 48px; font-family: cursive; text-align: center; margin-top: 20px;"> LOADING...</div>
+    <div id="loading-text" style="color: white; font-size: 24px; font-family: sans-serif; text-align: center; margin-top: 20px;">INITIALIZING...</div>
     <div id="unity-container">
-      <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
-      <div id="unity-loading-bar">
+      <canvas id="unity-canvas" tabindex="-1"></canvas>
+      <div id="unity-loading-bar" style="display:none;">
         <div id="unity-logo"></div>
         <div id="unity-progress-bar-empty">
           <div id="unity-progress-bar-full"></div>
@@ -20,30 +24,23 @@
       </div>
       <div id="unity-warning"> </div>
     </div>
-    <script src="jszip.js"></script>
 
+    <script src="jszip.js"></script>
 <script>
 const loadingText = document.querySelector("#loading-text");
-const CACHE_NAME = "hksilksongcache-v2"; // bump version if needed
-
-/* ================= FETCH OVERRIDE ================= */
+const CACHE_NAME = "hksilksongcache-v2";
 const originalFetch = window.fetch;
 
+// 1. Memory-Safe Fetch Override
 window.fetch = async function(resource, options) {
   let url = typeof resource === "string" ? resource : resource.url;
   let cleanPath = url.split("/").pop();
-
   const cache = await caches.open(CACHE_NAME);
-
   const cachedResponse = await cache.match(cleanPath);
-  if (cachedResponse) {
-    return cachedResponse;
-  }
-
+  if (cachedResponse) return cachedResponse;
   return originalFetch(resource, options);
 };
 
-/* ================= CACHE CHECK ================= */
 async function isCached() {
   const cache = await caches.open(CACHE_NAME);
   const done = await cache.match("CACHE_COMPLETE");
@@ -52,199 +49,126 @@ async function isCached() {
 
 async function cleanupOldCaches() {
   const cacheNames = await caches.keys();
-
-  await Promise.all(
-    cacheNames.map(name => {
-      if (name !== CACHE_NAME && name.includes("hksilksong")) {
-        console.log("Deleting old cache:", name);
-        return caches.delete(name);
-      }
-    })
-  );
+  await Promise.all(cacheNames.map(name => {
+    if (name !== CACHE_NAME && name.includes("hksilksong")) return caches.delete(name);
+  }));
 }
 
-/* ================= UNZIP ================= */
+// 2. Optimized Unzip (Clears memory references frequently)
 async function unzipAndStore(zipBlob) {
-  if (!zipBlob) {
-    throw new Error("ZIP is missing");
-  }
-
-  loadingText.textContent = "EXTRACTING ASSETS...";
-
+  loadingText.textContent = "EXTRACTING... (DON'T CLOSE TAB)";
   const zip = await JSZip.loadAsync(zipBlob);
   const files = Object.values(zip.files).filter(f => !f.dir);
-  const total = files.length;
-
   const cache = await caches.open(CACHE_NAME);
 
-  let processed = 0;
-  const batchSize = 10;
-
-  for (let i = 0; i < files.length; i += batchSize) {
-    const batch = files.slice(i, i + batchSize);
-
-    await Promise.all(batch.map(async (file) => {
-      try {
-        const blob = await file.async("blob");
-        await cache.put(file.name, new Response(blob));
-      } catch (e) {
-        console.error("Failed:", file.name, e);
-      }
-
-      processed++;
-      loadingText.textContent =
-        `EXTRACTING ASSETS... (${processed}/${total})`;
-    }));
-
-    await new Promise(r => setTimeout(r, 0));
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    try {
+      const blob = await file.async("blob");
+      await cache.put(file.name, new Response(blob));
+      loadingText.textContent = `EXTRACTING: ${Math.round((i/files.length)*100)}%`;
+    } catch (e) { console.error(e); }
   }
-
-  // ✅ mark cache complete
   await cache.put("CACHE_COMPLETE", new Response("ok"));
-
-  console.log("Cache complete");
+  // Suggest GC to browser
+  files.length = 0; 
 }
 
-/* ================= DOWNLOAD ================= */
-let loadedBytes = 0;
-
-async function fetchWithProgress(url) {
+async function fetchWithProgress(url, currentPart, totalParts) {
   const response = await originalFetch(url);
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch: " + url);
-  }
-
+  if (!response.ok) throw new Error("Network error");
+  
   const reader = response.body.getReader();
-  let chunks = [];
   let received = 0;
+  let chunks = [];
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-
-    received += value.length;
-    loadedBytes += value.length;
     chunks.push(value);
-
-    let mbDone = (loadedBytes / (1024 * 1024)).toFixed(2);
-    let mbTotal = '1986.64';
-
-    loadingText.textContent =
-      `DOWNLOADING ASSETS... (${mbDone} MB / ${mbTotal} MB)`;
+    received += value.length;
+    loadingText.textContent = `DOWNLOADING PART ${currentPart}/${totalParts}...`;
   }
-
-  let fullBuffer = new Uint8Array(received);
-  let offset = 0;
-
+  const body = new Uint8Array(received);
+  let position = 0;
   for (let chunk of chunks) {
-    fullBuffer.set(chunk, offset);
-    offset += chunk.length;
+    body.set(chunk, position);
+    position += chunk.length;
   }
-
-  return fullBuffer.buffer;
+  return body.buffer;
 }
 
-/* ================= MERGE ================= */
 async function mergeFiles(parts) {
-  console.log("Downloading parts:", parts.length);
-
-  const buffers = await Promise.all(
-    parts.map(part => fetchWithProgress(part))
-  );
-
-  return new Blob(buffers);
+  const buffers = [];
+  for (let i = 0; i < parts.length; i++) {
+    const buf = await fetchWithProgress(parts[i], i + 1, parts.length);
+    buffers.push(buf);
+  }
+  const finalBlob = new Blob(buffers);
+  buffers.length = 0; // Clear memory
+  return finalBlob;
 }
 
-/* ================= UTIL ================= */
 function getParts(file, start, end) {
   let parts = [];
-  for (let i = start; i <= end; i++) {
-    parts.push(file + ".part" + i);
-  }
+  for (let i = start; i <= end; i++) parts.push(file + ".part" + i);
   return parts;
 }
 
-/* ================= MAIN ================= */
 (async () => {
   try {
     await cleanupOldCaches(); 
     if (!(await isCached())) {
-      loadingText.textContent = "DOWNLOADING ASSETS...";
-
-      const webglzip = await mergeFiles(
-        getParts("StreamingAssets/aa/WebGL.zip", 1, 100)
-      );
-
+      const webglzip = await mergeFiles(getParts("StreamingAssets/aa/WebGL.zip", 1, 100));
       await unzipAndStore(webglzip);
-    } else {
-      loadingText.textContent = "LOADING FROM CACHE...";
     }
 
-    /* ================= UNITY START ================= */
+    // 3. Unity Configuration Optimized for Low-RAM Devices
     const canvas = document.querySelector("#unity-canvas");
     const loadingBar = document.querySelector("#unity-loading-bar");
     const progressBarFull = document.querySelector("#unity-progress-bar-full");
-    const warningBanner = document.querySelector("#unity-warning");
-
-    function unityShowBanner(msg, type) {
-      function update() {
-        warningBanner.style.display =
-          warningBanner.children.length ? 'block' : 'none';
-      }
-
-      let div = document.createElement('div');
-      div.innerHTML = msg;
-      warningBanner.appendChild(div);
-
-      if (type == 'error') {
-        div.style = 'background:red;padding:10px;';
-      } else {
-        if (type == 'warning') {
-          div.style = 'background:yellow;padding:10px;';
-        }
-        setTimeout(() => {
-          warningBanner.removeChild(div);
-          update();
-        }, 5000);
-      }
-
-      update();
-    }
 
     const buildUrl = "Build";
-
     const config = {
       dataUrl: buildUrl + "/w-pt.data.unityweb",
       frameworkUrl: buildUrl + "/w-pt.framework.js.unityweb",
       codeUrl: buildUrl + "/w-pt.wasm.unityweb",
       streamingAssetsUrl: "StreamingAssets",
-      companyName: "EDUrocks Group, Truffled, GN-Math",
-      productName: "Hollow Knight SilkSong",
+      companyName: "Team Cherry",
+      productName: "Hollow Knight Silksong",
       productVersion: "1.0",
-      showBanner: unityShowBanner,
+      devicePixelRatio: 1, // Crucial: Prevents crashing on high-DPI Chromebook screens
+      webglContextAttributes: {
+        preserveDrawingBuffer: false,
+        powerPreference: "high-performance",
+        failIfMajorPerformanceCaveat: false 
+      },
     };
 
     loadingBar.style.display = "block";
-
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@latest/Build/w-pt.loader.js";
 
     script.onload = () => {
       createUnityInstance(canvas, config, (progress) => {
         progressBarFull.style.width = (progress * 100) + "%";
+        loadingText.textContent = "LAUNCHING GAME...";
       })
       .then(() => {
         loadingBar.remove();
         loadingText.remove();
       })
-      .catch(alert);
+      .catch((err) => {
+        if (err.includes("out of memory")) {
+          alert("RAM FULL: Close other tabs and refresh!");
+        } else {
+          console.error(err);
+        }
+      });
     };
-
     document.body.appendChild(script);
 
   } catch (err) {
-    console.error(err);
     loadingText.textContent = "ERROR: " + err.message;
   }
 })();
