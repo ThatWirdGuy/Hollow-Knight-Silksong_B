@@ -8,31 +8,33 @@
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
     <style>
-      body { background-color: #000; margin: 0; overflow: hidden; }
-      #unity-container { width: 100%; height: 100%; position: absolute; }
-      #unity-canvas { width: 100vw; height: 100vh; background: #000; }
-      #loading-text { 
-        position: absolute; top: 50%; left: 50%; 
-        transform: translate(-50%, -50%);
-        color: white; font-family: sans-serif; text-align: center; 
+      body { background-color: #000; margin: 0; padding: 0; overflow: hidden; }
+      #unity-container { width: 100%; height: 100%; position: absolute; background: #000; }
+      #unity-canvas { width: 100vw; height: 100vh; display: block; }
+      #loading-overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background: #000; display: flex; flex-direction: column;
+        justify-content: center; align-items: center; z-index: 10;
       }
+      #status-text { color: #888; font-family: monospace; font-size: 14px; margin-top: 10px; }
     </style>
   </head>
   <body>
     <div id="unity-container">
       <canvas id="unity-canvas" tabindex="-1"></canvas>
     </div>
-    <div id="loading-text">INITIALIZING ENGINE...</div>
-    <div id="unity-loading-bar" style="display:none;">
-      <div id="unity-progress-bar-empty">
-        <div id="unity-progress-bar-full" style="background: #fff; height: 2px;"></div>
+
+    <div id="loading-overlay">
+      <div id="loading-bar-container" style="width: 200px; height: 2px; background: #333;">
+        <div id="loading-bar-fill" style="width: 0%; height: 100%; background: #fff; transition: width 0.3s;"></div>
       </div>
+      <div id="status-text">INITIALIZING ENGINE...</div>
     </div>
 
     <script>
-      const loadingText = document.querySelector("#loading-text");
+      const statusText = document.querySelector("#status-text");
+      const barFill = document.querySelector("#loading-bar-fill");
       const canvas = document.querySelector("#unity-canvas");
-      const progressBarFull = document.querySelector("#unity-progress-bar-full");
 
       const buildUrl = "Build";
       const config = {
@@ -44,50 +46,60 @@
         productName: "Hollow Knight Silksong",
         productVersion: "1.0",
         
-        // --- CHROMEBOOK STABILITY TWEAKS ---
-        devicePixelRatio: 1, // Stop 4K rendering on high-res screens
-        matchWebGLToCanvasSize: true, 
+        // --- AGGRESSIVE RAM MANAGEMENT ---
+        devicePixelRatio: 1, // Force low-res buffer
+        matchWebGLToCanvasSize: true,
         webglContextAttributes: {
           alpha: false,
-          antialias: false, // Saves huge amounts of VRAM
+          antialias: false,
           depth: true,
+          stencil: false, // Save extra bits of RAM
           preserveDrawingBuffer: false,
           powerPreference: "high-performance",
         },
       };
 
-      // Load Unity Loader Script
+      // Force Chrome to drop previous memory usage
+      window.addEventListener('load', () => {
+        if (window.gc) window.gc(); 
+      });
+
       const script = document.createElement("script");
+      // Using the loader from the latest build branch
       script.src = "https://cdn.jsdelivr.net/gh/web-ports/hollow-knight-silksong@latest/Build/w-pt.loader.js";
 
       script.onload = () => {
-        loadingText.textContent = "STARTING DOWNLOAD...";
+        statusText.textContent = "ENGINE READY. FETCHING DATA...";
         
         createUnityInstance(canvas, config, (progress) => {
-          progressBarFull.style.width = (progress * 100) + "%";
-          loadingText.textContent = "LOADING ASSETS: " + Math.round(progress * 100) + "%";
+          barFill.style.width = (progress * 100) + "%";
+          statusText.textContent = "LOADING: " + Math.round(progress * 100) + "%";
         })
-        .then((unityInstance) => {
-          loadingText.style.display = "none";
-          document.querySelector("#unity-loading-bar").style.display = "none";
+        .then((instance) => {
+          document.querySelector("#loading-overlay").style.display = "none";
+          console.log("Game Started");
         })
         .catch((err) => {
           console.error(err);
-          if (err.toString().toLowerCase().includes("memory")) {
-            loadingText.textContent = "OUT OF MEMORY: Close other tabs and refresh!";
+          // Auto-reload attempt if it's a transient memory error
+          if (err.includes("context lost") || err.includes("memory")) {
+            statusText.textContent = "RAM OVERLOAD. RELOADING IN 3s...";
+            setTimeout(() => location.reload(), 3000);
           } else {
-            loadingText.textContent = "CRASH: " + err;
+            statusText.textContent = "ERROR: " + err;
           }
         });
       };
 
       document.body.appendChild(script);
 
-      // Prevent Chromebook from putting the tab to sleep during load
-      window.addEventListener('beforeunload', function (e) {
-        e.preventDefault();
-        e.returnValue = '';
-      });
+      // Kill the black screen hang: If nothing happens in 30 seconds, refresh
+      setTimeout(() => {
+        if (statusText.textContent === "INITIALIZING ENGINE...") {
+            statusText.textContent = "STUCK? CHECKING CONNECTION...";
+            location.reload();
+        }
+      }, 30000);
     </script>
   </body>
 </html>
