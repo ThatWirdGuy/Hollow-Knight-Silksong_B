@@ -1,5 +1,7 @@
 # Hollow Knight: Silksong
 
+I am not the maker to dumb for that
+
 A webport of the game [Hollow Knight: Silksong](https://hollowknightsilksong.com/)!
 
 ---
