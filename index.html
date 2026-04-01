@@ -28,15 +28,18 @@ const CACHE_NAME = "hksilksongcache-v2";
 
 /* ================= CACHE AVAILABILITY CHECK ================= */
 let cacheAvailable = false;
+
 async function checkCacheAvailable() {
   try {
     if (!('caches' in window)) return false;
     const testCache = await caches.open("test-cache");
+    // School MDM policies typically fail HERE on put, not on open
     await testCache.put("test", new Response("ok"));
+    const check = await testCache.match("test");
     await caches.delete("test-cache");
-    return true;
+    return !!check;
   } catch (e) {
-    console.warn("Cache API unavailable (managed device?), skipping cache:", e);
+    console.warn("Cache API blocked:", e.message);
     return false;
   }
 }
@@ -50,9 +53,13 @@ window.fetch = async function(resource, options) {
   let url = typeof resource === "string" ? resource : resource.url;
   let cleanPath = url.split("/").pop();
 
-  const cache = await caches.open(CACHE_NAME);
-  const cachedResponse = await cache.match(cleanPath);
-  if (cachedResponse) return cachedResponse;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const cachedResponse = await cache.match(cleanPath);
+    if (cachedResponse) return cachedResponse;
+  } catch (e) {
+    console.warn("Cache read failed, falling back to network:", e.message);
+  }
 
   return originalFetch(resource, options);
 };
@@ -60,25 +67,33 @@ window.fetch = async function(resource, options) {
 /* ================= CACHE HELPERS ================= */
 async function isCached() {
   if (!cacheAvailable) return false;
-  const cache = await caches.open(CACHE_NAME);
-  const done = await cache.match("CACHE_COMPLETE");
-  return !!done;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const done = await cache.match("CACHE_COMPLETE");
+    return !!done;
+  } catch (e) {
+    return false;
+  }
 }
 
 async function cleanupOldCaches() {
   if (!cacheAvailable) return;
-  const cacheNames = await caches.keys();
-  await Promise.all(
-    cacheNames.map(name => {
-      if (name !== CACHE_NAME && name.includes("hksilksong")) {
-        console.log("Deleting old cache:", name);
-        return caches.delete(name);
-      }
-    })
-  );
+  try {
+    const cacheNames = await caches.keys();
+    await Promise.all(
+      cacheNames.map(name => {
+        if (name !== CACHE_NAME && name.includes("hksilksong")) {
+          console.log("Deleting old cache:", name);
+          return caches.delete(name);
+        }
+      })
+    );
+  } catch (e) {
+    console.warn("Cache cleanup failed:", e.message);
+  }
 }
 
-/* ================= UNZIP ================= */
+/* ================= UNZIP AND STORE ================= */
 async function unzipAndStore(zipBlob) {
   if (!zipBlob) throw new Error("ZIP is missing");
 
@@ -88,17 +103,15 @@ async function unzipAndStore(zipBlob) {
   const files = Object.values(zip.files).filter(f => !f.dir);
   const total = files.length;
 
-  // If cache unavailable, Unity will re-fetch from network each load
   if (!cacheAvailable) {
-    loadingText.textContent = "CACHE UNAVAILABLE - EXTRACTION SKIPPED";
+    loadingText.textContent = "NO CACHE - SKIPPING EXTRACTION...";
     return;
   }
 
   const cache = await caches.open(CACHE_NAME);
   let processed = 0;
-
-  // Process in small batches to avoid OOM on Chromebooks
   const batchSize = 5;
+
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, i + batchSize);
 
@@ -106,7 +119,6 @@ async function unzipAndStore(zipBlob) {
       try {
         const blob = await file.async("blob");
         await cache.put(file.name, new Response(blob));
-        blob.arrayBuffer && (blob._dead = true); // hint GC
       } catch (e) {
         console.error("Failed to cache:", file.name, e);
       }
@@ -114,14 +126,14 @@ async function unzipAndStore(zipBlob) {
     }
 
     loadingText.textContent = `EXTRACTING ASSETS... (${processed}/${total})`;
-    await new Promise(r => setTimeout(r, 0)); // yield to GC between batches
+    await new Promise(r => setTimeout(r, 0));
   }
 
   await cache.put("CACHE_COMPLETE", new Response("ok"));
   console.log("Cache complete");
 }
 
-/* ================= SEQUENTIAL DOWNLOAD (memory-safe) ================= */
+/* ================= SEQUENTIAL DOWNLOAD ================= */
 let loadedBytes = 0;
 const TOTAL_MB = 1986.64;
 
@@ -144,7 +156,6 @@ async function fetchPart(url) {
     loadingText.textContent = `DOWNLOADING ASSETS... (${mbDone} MB / ${TOTAL_MB} MB)`;
   }
 
-  // Assemble this part's buffer
   const buffer = new Uint8Array(received);
   let offset = 0;
   for (const chunk of chunks) {
@@ -154,7 +165,6 @@ async function fetchPart(url) {
   return buffer.buffer;
 }
 
-/* ================= SEQUENTIAL MERGE (avoids holding all parts in RAM) ================= */
 async function downloadPartsSequentially(parts) {
   console.log("Downloading", parts.length, "parts sequentially");
   const blobs = [];
@@ -162,7 +172,6 @@ async function downloadPartsSequentially(parts) {
   for (let i = 0; i < parts.length; i++) {
     const buffer = await fetchPart(parts[i]);
     blobs.push(new Blob([buffer]));
-    // Allow GC to collect the ArrayBuffer before next part
     await new Promise(r => setTimeout(r, 0));
   }
 
@@ -181,19 +190,26 @@ function getParts(file, start, end) {
 (async () => {
   try {
     cacheAvailable = await checkCacheAvailable();
+    console.log("Cache available:", cacheAvailable);
 
     await cleanupOldCaches();
 
-    if (!(await isCached())) {
+    if (await isCached()) {
+      loadingText.textContent = "LOADING FROM CACHE...";
+    } else {
       loadingText.textContent = "DOWNLOADING ASSETS...";
 
       const webglzip = await downloadPartsSequentially(
         getParts("StreamingAssets/aa/WebGL.zip", 1, 100)
       );
 
-      await unzipAndStore(webglzip);
-    } else {
-      loadingText.textContent = "LOADING FROM CACHE...";
+      if (cacheAvailable) {
+        try {
+          await unzipAndStore(webglzip);
+        } catch (e) {
+          console.warn("Caching failed, continuing without cache:", e);
+        }
+      }
     }
 
     /* ================= UNITY START ================= */
