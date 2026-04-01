@@ -25,6 +25,7 @@
 const loadingText = document.querySelector("#loading-text");
 const CACHE_NAME = "hksilksongcache-v2";
 const REPO = "https://cdn.jsdelivr.net/gh/ThatWirdGuy/Hollow-Knight-Silksong_B@master";
+const PARALLEL = 10; // download 10 parts at once
 
 /* ================= CACHE AVAILABILITY CHECK ================= */
 let cacheAvailable = false;
@@ -113,7 +114,6 @@ async function unzipAndStore(zipBlob) {
 
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, i + batchSize);
-
     for (const file of batch) {
       try {
         const blob = await file.async("blob");
@@ -123,7 +123,6 @@ async function unzipAndStore(zipBlob) {
       }
       processed++;
     }
-
     loadingText.textContent = `EXTRACTING ASSETS... (${processed}/${total})`;
     await new Promise(r => setTimeout(r, 0));
   }
@@ -132,7 +131,7 @@ async function unzipAndStore(zipBlob) {
   console.log("Cache complete");
 }
 
-/* ================= SEQUENTIAL DOWNLOAD ================= */
+/* ================= DOWNLOAD ================= */
 let loadedBytes = 0;
 const TOTAL_MB = 1986.64;
 
@@ -152,7 +151,8 @@ async function fetchPart(url) {
     chunks.push(value);
 
     const mbDone = (loadedBytes / (1024 * 1024)).toFixed(2);
-    loadingText.textContent = `DOWNLOADING ASSETS... (${mbDone} MB / ${TOTAL_MB} MB)`;
+    const pct = Math.min(100, (loadedBytes / (TOTAL_MB * 1024 * 1024) * 100)).toFixed(1);
+    loadingText.textContent = `DOWNLOADING... ${mbDone} MB / ${TOTAL_MB} MB (${pct}%)`;
   }
 
   const buffer = new Uint8Array(received);
@@ -164,17 +164,22 @@ async function fetchPart(url) {
   return buffer.buffer;
 }
 
-async function downloadPartsSequentially(parts) {
-  console.log("Downloading", parts.length, "parts sequentially");
-  const blobs = [];
+/* ================= PARALLEL BATCH DOWNLOAD ================= */
+async function downloadPartsParallel(parts) {
+  console.log(`Downloading ${parts.length} parts, ${PARALLEL} at a time`);
+  const results = new Array(parts.length);
 
-  for (let i = 0; i < parts.length; i++) {
-    const buffer = await fetchPart(parts[i]);
-    blobs.push(new Blob([buffer]));
+  for (let i = 0; i < parts.length; i += PARALLEL) {
+    const batch = parts.slice(i, i + PARALLEL);
+    const buffers = await Promise.all(batch.map(url => fetchPart(url)));
+    for (let j = 0; j < buffers.length; j++) {
+      results[i + j] = new Blob([buffers[j]]);
+    }
+    // yield to GC between batches
     await new Promise(r => setTimeout(r, 0));
   }
 
-  return new Blob(blobs);
+  return new Blob(results);
 }
 
 function getParts(file, start, end) {
@@ -198,7 +203,7 @@ function getParts(file, start, end) {
     } else {
       loadingText.textContent = "DOWNLOADING ASSETS...";
 
-      const webglzip = await downloadPartsSequentially(
+      const webglzip = await downloadPartsParallel(
         getParts("StreamingAssets/aa/WebGL.zip", 1, 100)
       );
 
