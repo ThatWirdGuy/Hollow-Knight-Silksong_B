@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="TemplateData/style.css">
   </head>
   <body>
-    <div id="loading-text" style="color: white; font-size: 48px; font-family: cursive; text-align: center; margin-top: 20px;"> LOADING...</div>
+    <div id="loading-text" style="color: white; font-size: 48px; font-family: cursive; text-align: center; margin-top: 20px;">LOADING...</div>
     <div id="unity-container">
       <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
       <div id="unity-loading-bar">
@@ -24,35 +24,50 @@
 
 <script>
 const loadingText = document.querySelector("#loading-text");
-const CACHE_NAME = "hksilksongcache-v2"; // bump version if needed
+const CACHE_NAME = "hksilksongcache-v2";
+
+/* ================= CACHE AVAILABILITY CHECK ================= */
+let cacheAvailable = false;
+async function checkCacheAvailable() {
+  try {
+    if (!('caches' in window)) return false;
+    const testCache = await caches.open("test-cache");
+    await testCache.put("test", new Response("ok"));
+    await caches.delete("test-cache");
+    return true;
+  } catch (e) {
+    console.warn("Cache API unavailable (managed device?), skipping cache:", e);
+    return false;
+  }
+}
 
 /* ================= FETCH OVERRIDE ================= */
 const originalFetch = window.fetch;
 
 window.fetch = async function(resource, options) {
+  if (!cacheAvailable) return originalFetch(resource, options);
+
   let url = typeof resource === "string" ? resource : resource.url;
   let cleanPath = url.split("/").pop();
 
   const cache = await caches.open(CACHE_NAME);
-
   const cachedResponse = await cache.match(cleanPath);
-  if (cachedResponse) {
-    return cachedResponse;
-  }
+  if (cachedResponse) return cachedResponse;
 
   return originalFetch(resource, options);
 };
 
-/* ================= CACHE CHECK ================= */
+/* ================= CACHE HELPERS ================= */
 async function isCached() {
+  if (!cacheAvailable) return false;
   const cache = await caches.open(CACHE_NAME);
   const done = await cache.match("CACHE_COMPLETE");
   return !!done;
 }
 
 async function cleanupOldCaches() {
+  if (!cacheAvailable) return;
   const cacheNames = await caches.keys();
-
   await Promise.all(
     cacheNames.map(name => {
       if (name !== CACHE_NAME && name.includes("hksilksong")) {
@@ -65,9 +80,7 @@ async function cleanupOldCaches() {
 
 /* ================= UNZIP ================= */
 async function unzipAndStore(zipBlob) {
-  if (!zipBlob) {
-    throw new Error("ZIP is missing");
-  }
+  if (!zipBlob) throw new Error("ZIP is missing");
 
   loadingText.textContent = "EXTRACTING ASSETS...";
 
@@ -75,90 +88,89 @@ async function unzipAndStore(zipBlob) {
   const files = Object.values(zip.files).filter(f => !f.dir);
   const total = files.length;
 
+  // If cache unavailable, Unity will re-fetch from network each load
+  if (!cacheAvailable) {
+    loadingText.textContent = "CACHE UNAVAILABLE - EXTRACTION SKIPPED";
+    return;
+  }
+
   const cache = await caches.open(CACHE_NAME);
-
   let processed = 0;
-  const batchSize = 10;
 
+  // Process in small batches to avoid OOM on Chromebooks
+  const batchSize = 5;
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, i + batchSize);
 
-    await Promise.all(batch.map(async (file) => {
+    for (const file of batch) {
       try {
         const blob = await file.async("blob");
         await cache.put(file.name, new Response(blob));
+        blob.arrayBuffer && (blob._dead = true); // hint GC
       } catch (e) {
-        console.error("Failed:", file.name, e);
+        console.error("Failed to cache:", file.name, e);
       }
-
       processed++;
-      loadingText.textContent =
-        `EXTRACTING ASSETS... (${processed}/${total})`;
-    }));
+    }
 
-    await new Promise(r => setTimeout(r, 0));
+    loadingText.textContent = `EXTRACTING ASSETS... (${processed}/${total})`;
+    await new Promise(r => setTimeout(r, 0)); // yield to GC between batches
   }
 
-  // ✅ mark cache complete
   await cache.put("CACHE_COMPLETE", new Response("ok"));
-
   console.log("Cache complete");
 }
 
-/* ================= DOWNLOAD ================= */
+/* ================= SEQUENTIAL DOWNLOAD (memory-safe) ================= */
 let loadedBytes = 0;
+const TOTAL_MB = 1986.64;
 
-async function fetchWithProgress(url) {
+async function fetchPart(url) {
   const response = await originalFetch(url);
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch: " + url);
-  }
+  if (!response.ok) throw new Error("Failed to fetch: " + url);
 
   const reader = response.body.getReader();
-  let chunks = [];
+  const chunks = [];
   let received = 0;
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-
     received += value.length;
     loadedBytes += value.length;
     chunks.push(value);
 
-    let mbDone = (loadedBytes / (1024 * 1024)).toFixed(2);
-    let mbTotal = '1986.64';
-
-    loadingText.textContent =
-      `DOWNLOADING ASSETS... (${mbDone} MB / ${mbTotal} MB)`;
+    const mbDone = (loadedBytes / (1024 * 1024)).toFixed(2);
+    loadingText.textContent = `DOWNLOADING ASSETS... (${mbDone} MB / ${TOTAL_MB} MB)`;
   }
 
-  let fullBuffer = new Uint8Array(received);
+  // Assemble this part's buffer
+  const buffer = new Uint8Array(received);
   let offset = 0;
-
-  for (let chunk of chunks) {
-    fullBuffer.set(chunk, offset);
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
     offset += chunk.length;
   }
-
-  return fullBuffer.buffer;
+  return buffer.buffer;
 }
 
-/* ================= MERGE ================= */
-async function mergeFiles(parts) {
-  console.log("Downloading parts:", parts.length);
+/* ================= SEQUENTIAL MERGE (avoids holding all parts in RAM) ================= */
+async function downloadPartsSequentially(parts) {
+  console.log("Downloading", parts.length, "parts sequentially");
+  const blobs = [];
 
-  const buffers = await Promise.all(
-    parts.map(part => fetchWithProgress(part))
-  );
+  for (let i = 0; i < parts.length; i++) {
+    const buffer = await fetchPart(parts[i]);
+    blobs.push(new Blob([buffer]));
+    // Allow GC to collect the ArrayBuffer before next part
+    await new Promise(r => setTimeout(r, 0));
+  }
 
-  return new Blob(buffers);
+  return new Blob(blobs);
 }
 
-/* ================= UTIL ================= */
 function getParts(file, start, end) {
-  let parts = [];
+  const parts = [];
   for (let i = start; i <= end; i++) {
     parts.push(file + ".part" + i);
   }
@@ -168,11 +180,14 @@ function getParts(file, start, end) {
 /* ================= MAIN ================= */
 (async () => {
   try {
-    await cleanupOldCaches(); 
+    cacheAvailable = await checkCacheAvailable();
+
+    await cleanupOldCaches();
+
     if (!(await isCached())) {
       loadingText.textContent = "DOWNLOADING ASSETS...";
 
-      const webglzip = await mergeFiles(
+      const webglzip = await downloadPartsSequentially(
         getParts("StreamingAssets/aa/WebGL.zip", 1, 100)
       );
 
@@ -192,28 +207,19 @@ function getParts(file, start, end) {
         warningBanner.style.display =
           warningBanner.children.length ? 'block' : 'none';
       }
-
       let div = document.createElement('div');
       div.innerHTML = msg;
       warningBanner.appendChild(div);
-
       if (type == 'error') {
         div.style = 'background:red;padding:10px;';
       } else {
-        if (type == 'warning') {
-          div.style = 'background:yellow;padding:10px;';
-        }
-        setTimeout(() => {
-          warningBanner.removeChild(div);
-          update();
-        }, 5000);
+        if (type == 'warning') div.style = 'background:yellow;padding:10px;';
+        setTimeout(() => { warningBanner.removeChild(div); update(); }, 5000);
       }
-
       update();
     }
 
     const buildUrl = "Build";
-
     const config = {
       dataUrl: buildUrl + "/w-pt.data.unityweb",
       frameworkUrl: buildUrl + "/w-pt.framework.js.unityweb",
