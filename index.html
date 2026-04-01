@@ -1,12 +1,11 @@
 <!DOCTYPE html>
 <html lang="en-us">
   <head>
-    <base href="https://rawcdn.githack.com/ThatWirdGuy/Hollow-Knight-Silksong_B/master/">
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <title>Unity Web Player | Hollow Knight SilkSong</title>
-    <link rel="shortcut icon" href="TemplateData/favicon.ico">
-    <link rel="stylesheet" href="TemplateData/style.css">
+    <link rel="shortcut icon" href="https://cdn.jsdelivr.net/gh/ThatWirdGuy/Hollow-Knight-Silksong_B@master/TemplateData/favicon.ico">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/ThatWirdGuy/Hollow-Knight-Silksong_B@master/TemplateData/style.css">
   </head>
   <body>
     <div id="loading-text" style="color: white; font-size: 48px; font-family: cursive; text-align: center; margin-top: 20px;">LOADING...</div>
@@ -20,11 +19,12 @@
       </div>
       <div id="unity-warning"> </div>
     </div>
-    <script src="jszip.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/ThatWirdGuy/Hollow-Knight-Silksong_B@master/jszip.js"></script>
 
 <script>
 const loadingText = document.querySelector("#loading-text");
 const CACHE_NAME = "hksilksongcache-v2";
+const REPO = "https://cdn.jsdelivr.net/gh/ThatWirdGuy/Hollow-Knight-Silksong_B@master";
 
 /* ================= CACHE AVAILABILITY CHECK ================= */
 let cacheAvailable = false;
@@ -33,7 +33,6 @@ async function checkCacheAvailable() {
   try {
     if (!('caches' in window)) return false;
     const testCache = await caches.open("test-cache");
-    // School MDM policies typically fail HERE on put, not on open
     await testCache.put("test", new Response("ok"));
     const check = await testCache.match("test");
     await caches.delete("test-cache");
@@ -181,7 +180,7 @@ async function downloadPartsSequentially(parts) {
 function getParts(file, start, end) {
   const parts = [];
   for (let i = start; i <= end; i++) {
-    parts.push(file + ".part" + i);
+    parts.push(REPO + "/" + file + ".part" + i);
   }
   return parts;
 }
@@ -235,12 +234,11 @@ function getParts(file, start, end) {
       update();
     }
 
-    const buildUrl = "Build";
     const config = {
-      dataUrl: buildUrl + "/w-pt.data.unityweb",
-      frameworkUrl: buildUrl + "/w-pt.framework.js.unityweb",
-      codeUrl: buildUrl + "/w-pt.wasm.unityweb",
-      streamingAssetsUrl: "StreamingAssets",
+      dataUrl: REPO + "/Build/w-pt.data.unityweb",
+      frameworkUrl: REPO + "/Build/w-pt.framework.js.unityweb",
+      codeUrl: REPO + "/Build/w-pt.wasm.unityweb",
+      streamingAssetsUrl: REPO + "/StreamingAssets",
       companyName: "EDUrocks Group, Truffled, GN-Math",
       productName: "Hollow Knight SilkSong",
       productVersion: "1.0",
@@ -250,7 +248,7 @@ function getParts(file, start, end) {
     loadingBar.style.display = "block";
 
     const script = document.createElement("script");
-    script.src = "https://rawcdn.githack.com/ThatWirdGuy/Hollow-Knight-Silksong_B/master/Build/w-pt.loader.js";
+    script.src = REPO + "/Build/w-pt.loader.js";
 
     script.onload = () => {
       createUnityInstance(canvas, config, (progress) => {
